@@ -7,14 +7,13 @@ import {LearnItem} from '../../../../apps/Learn/models/LearnItem'
 import { ToastController, IonicModule } from '@ionic/angular'
 import { OdmTreeNodeContentComponent } from './tree-node-content/odm-tree-node-content.component';
 import { NgIf, NgFor, AsyncPipe } from '@angular/common';
-import { OdmTreeModule } from '../odm-tree.module';
 
 @Component({
     selector: 'app-tree-node',
     templateUrl: './odm-tree-node.component.html',
     changeDetection: ChangeDetectionStrategy.Eager,
     styleUrls: ['./odm-tree-node.component.css'],
-    imports: [OdmTreeNodeContentComponent, NgIf, IonicModule, NgFor, OdmTreeModule, AsyncPipe]
+    imports: [OdmTreeNodeContentComponent, NgIf, IonicModule, NgFor, AsyncPipe]
 })
 export class OdmTreeNodeComponent implements OnInit {
 

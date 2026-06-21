@@ -36,7 +36,7 @@ const swOpts = {
 console.log(`service worker swOpts`, swOpts)
 
 @NgModule({
-    declarations: [],
+    declarations: [AppComponent],
     imports: [
         BrowserModule,
         IonicModule.forRoot({
