@@ -311,7 +311,15 @@ export class BrowserOdmStorage {
    * If the older, losing row's `data` actually *differs* from what's cached (a genuine
    * conflicting edit, not just a benign duplicate/replay of data we already have), it isn't
    * silently discarded - it's archived as its own row (id suffixed `_conflict_<timestamp>`)
-   * and `conflictDetected$` fires, so resolution is best-effort but never lossy. */
+   * and `conflictDetected$` fires, so resolution is best-effort but never lossy.
+   *
+   * That "differs" check alone isn't enough, though: a delayed realtime echo of *this device's
+   * own* earlier edit is, by definition, older and differs from whatever this device has since
+   * written - indistinguishable from a genuine cross-device conflict by timestamp/content alone
+   * (GH #73). `OdmItem$2` now remembers its own last few `whenLastModified` values
+   * (`whenLastModifiedHistory`); if the cached (winning) row's history contains the incoming
+   * row's exact timestamp, this is unambiguously an echo of a write *we already know about*, not
+   * a conflicting edit from elsewhere - skip archiving it. */
   async put<TRaw>(row: PostgresOdmRow<TRaw> & Partial<Pick<BrowserOdmRow<TRaw>, 'key' | 'whenFirstStoredLocally' | 'whenLastStoredLocally'>>): Promise<BrowserOdmRow<TRaw>> {
     return this.withDb(async db => {
       const key = rowKey(row.collection, row.item_id)
@@ -325,7 +333,10 @@ export class BrowserOdmStorage {
         const refreshed: BrowserOdmRow<TRaw> = {...existing, whenLastStoredLocally: now}
         await requestToPromise(store.put(refreshed))
 
-        if (JSON.stringify(row.data) !== JSON.stringify(existing.data)) {
+        const existingHistory: string[] | undefined = (existing.data as any)?.whenLastModifiedHistory
+        const isEchoOfOwnKnownWrite = !!row.when_last_modified && !!existingHistory?.includes(row.when_last_modified)
+
+        if (!isEchoOfOwnKnownWrite && JSON.stringify(row.data) !== JSON.stringify(existing.data)) {
           const loserId = `${row.item_id}_conflict_${(row.when_last_modified ?? now).replace(/[:.]/g, '-')}`
           const loserRow: BrowserOdmRow<TRaw> = {
             ...row,

@@ -316,3 +316,47 @@ describe('GenericItemsService/GenericItem$ - sync (realtime) reactivity', () => 
     expect(item$.val?.title).toBe('My unsynced edit')
   })
 })
+
+// Covers OdmItem$2.setWhenLastModified()'s bookkeeping that BrowserOdmStorage.put() relies on to
+// recognize a delayed echo of this device's own earlier write, rather than misclassifying it as a
+// genuine conflict from elsewhere (GH #73 root cause).
+describe('OdmItem$2 - own-write provenance (whenLastModifiedHistory / lastEditedBySession)', () => {
+  it('accumulates whenLastModifiedHistory across successive local edits, oldest first', async () => {
+    const {service} = setup()
+    const item$ = service.add(Object.assign(new GenericItem(), {title: 'v1'}))
+    await flushMicrotasks()
+    const afterFirstSave = [...(item$.val?.whenLastModifiedHistory ?? [])]
+    expect(afterFirstSave.length).toBe(1)
+
+    item$.patchNow({title: 'v2'} as any)
+    await flushMicrotasks()
+
+    const history = item$.val?.whenLastModifiedHistory ?? []
+    expect(history.length).toBe(2)
+    expect(history[0]).toBe(afterFirstSave[0]) // oldest entry preserved
+    expect(new Date(history[1]).getTime()).toBeGreaterThanOrEqual(new Date(history[0]).getTime())
+  })
+
+  it('caps whenLastModifiedHistory rather than growing unboundedly', async () => {
+    const {service} = setup()
+    const item$ = service.add(Object.assign(new GenericItem(), {title: 'v0'}))
+    await flushMicrotasks()
+
+    for (let i = 0; i < 20; i++) {
+      item$.patchNow({title: `v${i}`} as any)
+    }
+    await flushMicrotasks()
+
+    expect((item$.val?.whenLastModifiedHistory ?? []).length).toBeLessThanOrEqual(8)
+  })
+
+  it('stamps lastEditedBySession with a stable id, the same across separate items/saves in this session', async () => {
+    const {service} = setup()
+    const item1$ = service.add(Object.assign(new GenericItem(), {title: 'a'}))
+    const item2$ = service.add(Object.assign(new GenericItem(), {title: 'b'}))
+    await flushMicrotasks()
+
+    expect(item1$.val?.lastEditedBySession).toBeTruthy()
+    expect(item1$.val?.lastEditedBySession).toBe(item2$.val?.lastEditedBySession)
+  })
+})

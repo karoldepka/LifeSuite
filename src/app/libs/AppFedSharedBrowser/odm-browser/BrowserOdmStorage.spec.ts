@@ -171,6 +171,53 @@ describe('BrowserOdmStorage', () => {
       const allRows = await storage.getAllForCollection<SutItem>(collection)
       expect(allRows.length).toBe(1)
     })
+
+    it('a delayed echo of this device\'s own earlier write is never archived as a conflict, even though its timestamp is older and its content differs (GH #73 root cause)', async () => {
+      const collection = uniqueCollection()
+      const conflicts: any[] = []
+      storage.conflictDetected$.subscribe(c => conflicts.push(c))
+
+      // Simulates OdmItem$2: two sequential edits from the same tab, each remembering its own
+      // whenLastModified in whenLastModifiedHistory (see setWhenLastModified()).
+      const editA = new Date('2024-01-01T00:00:00.000Z').toISOString()
+      const editB = new Date('2024-01-02T00:00:00.000Z').toISOString()
+
+      // Edit B (the newer edit) lands first - its own history already includes edit A's timestamp,
+      // since both came from the same running OdmItem$2 instance.
+      const winner = createPostgresOdmRow<SutItem>(collection, 'item1', 'owner1', {title: 'edit B'} as any)
+      ;(winner.data as any).whenLastModifiedHistory = [editA, editB]
+      winner.when_last_modified = editB
+      await storage.put(winner)
+
+      // Edit A's realtime echo arrives late - older timestamp, different (superseded) content.
+      const delayedEchoOfEditA = createPostgresOdmRow<SutItem>(collection, 'item1', 'owner1', {title: 'edit A'} as any)
+      delayedEchoOfEditA.when_last_modified = editA
+      await storage.put(delayedEchoOfEditA)
+
+      expect(conflicts.length).toBe(0)
+      const allRows = await storage.getAllForCollection<SutItem>(collection)
+      expect(allRows.length).toBe(1) // no archived loser row
+      expect(allRows[0].data.title).toBe('edit B') // winner untouched
+    })
+
+    it('a genuinely conflicting older write from elsewhere (not in the cached row\'s own history) is still archived', async () => {
+      const collection = uniqueCollection()
+      const conflicts: any[] = []
+      storage.conflictDetected$.subscribe(c => conflicts.push(c))
+
+      const winner = createPostgresOdmRow<SutItem>(collection, 'item1', 'owner1', {title: 'winner (newer)'} as any)
+      ;(winner.data as any).whenLastModifiedHistory = [new Date('2024-01-01T12:00:00.000Z').toISOString()]
+      winner.when_last_modified = new Date('2024-01-02T00:00:00.000Z').toISOString()
+      await storage.put(winner)
+
+      // Older, different content, and its timestamp does NOT appear in the winner's own history -
+      // a genuine edit from another device/session, not an echo of this one's own writes.
+      const loser = createPostgresOdmRow<SutItem>(collection, 'item1', 'owner1', {title: 'loser (older, different)'} as any)
+      loser.when_last_modified = new Date('2024-01-01T00:00:00.000Z').toISOString()
+      await storage.put(loser)
+
+      expect(conflicts.length).toBe(1)
+    })
   })
 
   describe('sync cursor', () => {

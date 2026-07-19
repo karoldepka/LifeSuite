@@ -11,8 +11,21 @@ import {tap} from 'rxjs/operators'
 import {getNowTimePointSuitableForId, odmTimestampToMillis} from './utils'
 import {BehaviorSubject} from 'rxjs'
 import {debugLog} from '../utils/log'
+import {v4 as uuid4} from 'uuid'
 
 export type UserId = string
+
+/** One random id per page load/tab - stamped on every save (see `setWhenLastModified()`) so a
+ * write can later be recognized as having come from this exact session, regardless of timing.
+ * Not yet consulted anywhere (see `lastEditedBySession` below) - stored for future, more direct
+ * conflict-provenance use than the timestamp-history comparison in `BrowserOdmStorage.put()`
+ * currently relies on. */
+const SESSION_ID = uuid4()
+
+/** How many of this item's own past `whenLastModified` values to remember (see
+ * `whenLastModifiedHistory` below) - just enough to cover a realistically delayed realtime echo,
+ * not a full history. */
+const OWN_WHEN_LAST_MODIFIED_HISTORY_LIMIT = 8
 
 export class OdmInMemItemWriteOnce {
   public whenCreated?: OdmTimestamp
@@ -28,6 +41,16 @@ export class OdmInMemItemWriteOnce {
 /** FIXME: rename OdmInMemItemData */
 export class OdmInMemItem extends OdmInMemItemWriteOnce {
   public whenLastModified?: OdmTimestamp
+  /** This item's own last few self-written `whenLastModified` values (ISO strings, oldest first,
+   * capped at `OWN_WHEN_LAST_MODIFIED_HISTORY_LIMIT`) - lets a delayed realtime echo of one of
+   * *our own* past writes be recognized by exact match against this list and never mistaken for
+   * a genuinely conflicting edit from elsewhere, the way a plain "is the incoming timestamp older"
+   * comparison can't (see `BrowserOdmStorage.put()` - GH #73's same-device false-positive conflict). */
+  public whenLastModifiedHistory?: string[]
+  /** Which session (this browser tab's lifetime) last wrote this item - see `SESSION_ID` above.
+   * Not consulted yet; stored now for future conflict-provenance use (e.g. a UI showing which
+   * device/session an edit or a conflict came from). */
+  public lastEditedBySession?: string
   public whereCreated?: any
   /** Fractional sibling-ordering key (OrYoL-style), spaced by ODM_ORDER_STEP so nodes
    * can be reordered/inserted between neighbours without renumbering siblings. */
@@ -358,7 +381,12 @@ export class OdmItem$2<
   setWhenLastModified() {
     // debugLog(`setWhenLastModified`, this)
     // console.trace(`setWhenLastModified`, this)
-    this.currentVal ! . whenLastModified = OdmBackend.nowTimestamp()
+    const now = OdmBackend.nowTimestamp()
+    this.currentVal ! . whenLastModified = now
+    const history = this.currentVal ! . whenLastModifiedHistory ?? []
+    history.push(now.toDate().toISOString())
+    this.currentVal ! . whenLastModifiedHistory = history.slice(-OWN_WHEN_LAST_MODIFIED_HISTORY_LIMIT)
+    this.currentVal ! . lastEditedBySession = SESSION_ID
   }
 
   applyDataFromDbAndEmit(incomingConverted: TInMemData) {
